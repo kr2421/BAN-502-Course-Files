@@ -1,0 +1,310 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+```{r}
+options(tidyverse.quiet=TRUE)
+library(tidyverse)
+library(caret)
+library(ggplot2)
+library(ROCR)
+library(e1071)
+library(mice)
+library(VIM)
+library(ranger)
+library(RColorBrewer)
+library(rattle)
+library(rpart)
+library(leaps)
+library(GGally)
+library(gridExtra)
+library(car)
+library(lmtest)
+library(ggcorrplot)
+library(lubridate)
+library(cluster)
+library(factoextra)
+library(dendextend)
+```
+
+```{r}
+library(readr)
+chicago <- read_csv("chicago.csv")
+```
+
+```{r}
+chicago = chicago %>% drop_na()
+```
+
+```{r}
+chicago = chicago %>% select(-X1, -ID, -Longitude, -Latitude, -`Case Number`, -Location, -`Updated On`, -`X Coordinate`, -`Y Coordinate`) %>%
+  mutate(Block = as.factor(Block)) %>%
+  mutate(IUCR = as.factor(IUCR)) %>%
+  mutate(`Primary Type` = as.factor(`Primary Type`)) %>%
+  mutate(Description = as.factor(Description)) %>%
+  mutate(`Location Description` = as.factor(`Location Description`)) %>%
+  mutate(Arrest = as.factor(Arrest)) %>%
+ mutate(Arrest = fct_recode(Arrest, "False" = "0", "True" = "1")) %>%
+  mutate(Domestic = as.factor(Domestic)) %>%
+ mutate(Domestic = fct_recode(Domestic, "False" = "0", "True" = "1")) %>%
+  mutate(Beat = as.factor(Beat)) %>%
+  mutate(District = as.factor(District)) %>%
+  mutate(`FBI Code` = as.factor(`FBI Code`)) %>%
+  mutate(Date = as.character.Date(Date))
+```
+Removed unnecessary variables from data frame "chicago" and converted some remaining variables into factors.
+
+```{r}
+chicago = chicago %>% mutate (Ward = as.factor(Ward)) %>% mutate(`Community Area` = as.factor(`Community Area`))
+```
+
+
+```{r}
+chicago_small = chicago %>% select(`Primary Type`, Arrest, Domestic, District, Ward, `Community Area`, `FBI Code`) 
+```
+
+Logistic Regression Models
+```{r}
+set.seed(1234)
+train.rows = createDataPartition(y = chicago_small$Arrest, p=0.7, list = FALSE)
+train = slice(chicago_small, train.rows)
+test = slice(chicago_small, -train.rows)
+```
+
+```{r}
+smalltree1 = rpart(Arrest~., method="class", train)
+fancyRpartPlot(smalltree1)
+printcp(smalltree1)  
+plotcp(smalltree1)
+```
+
+```{r}
+smalltree2 = rpart(Arrest ~ `Primary Type` + District, method="class", train)
+fancyRpartPlot(smalltree2)
+printcp(smalltree2)  
+plotcp(smalltree2)
+```
+```{r}
+treepred1 = predict(smalltree1, train, type = "class")
+head(treepred1)
+```
+```{r}
+confusionMatrix(treepred1,train$Arrest,positive="TRUE")
+```
+
+```{r}
+treepred_test1 = predict(smalltree1, test, type = "class")
+head(treepred_test1)
+```
+
+```{r}
+  confusionMatrix(treepred_test1,test$Arrest,positive="TRUE")
+```
+
+```{r}
+treepred2 = predict(smalltree2, train, type = "class")
+confusionMatrix(treepred2,train$Arrest,positive="TRUE")
+```
+
+```{r}
+treepred_test2 = predict(smalltree2, test, type = "class")
+confusionMatrix(treepred_test2,test$Arrest,positive="TRUE")
+```
+
+```{r}
+smalltree1 = prune(smalltree1,cp= smalltree1$cptable[which.min(smalltree1$cptable[,"xerror"]),"CP"])
+fancyRpartPlot(smalltree1)
+```
+
+Random Forests
+```{r}
+treepred1 = predict(smalltree1, train, type = "class")
+confusionMatrix(treepred1,train$Arrest,positive="TRUE")
+```
+
+```{r}
+treepred_test1 = predict(smalltree1, test, type = "class")
+confusionMatrix(treepred_test1,test$Arrest,positive="TRUE")
+```
+
+```{r}
+train_under50 = train %>% select(-`Community Area`)
+```
+```{r}
+test_under50 = test %>% select(-`Community Area`)
+```
+
+I realized I was getting errors for my Random Forests because the maximum levels it would handle were 53 and Community Area had 77, so I removed that variable and created a new train/test set labled "under 50".
+
+```{r}
+fit_control = trainControl(method = "cv", number = 10)
+
+set.seed(1234)
+rf_fit = train(x=as.matrix(train_under50[,-2]), y=as.matrix(train_under50$Arrest),    
+                method = "ranger",  
+                importance = "permutation",
+                trControl = fit_control)
+```
+
+```{r}
+#saveRDS(rf_fit, "rf_fit.rds")
+```
+```{r}
+#rf_fit = readRDS("rf_fit.rds")
+```
+
+```{r}
+varImp(rf_fit)
+rf_fit
+```
+
+```{r}
+predRF = predict(rf_fit)
+head(predRF)
+```
+
+```{r}
+confusionMatrix(predRF, train_under50$Arrest, positive = "TRUE")
+```
+
+```{r}
+predRF_test = predict(rf_fit, newdata = test_under50)
+```
+```{r}
+confusionMatrix(predRF_test, test_under50$Arrest, positive = "TRUE")
+```
+The training set in a random forest was slightly better than the testing set by 1%.
+
+Parameter Tuning
+```{r}
+tunegrid = expand.grid(mtry = 1:5, splitrule = c("hellinger"), min.node.size=1) 
+```
+```{r}
+set.seed(1234)  
+rf_fit2 = train(x = as.matrix(train_under50[,-2]),y = as.matrix(train_under50$Arrest),
+               method = "ranger",  
+               tuneGrid = tunegrid,
+               importance = "permutation", 
+               trControl = fit_control)
+```
+
+```{r}
+print(rf_fit2)
+plot(rf_fit2)
+varImp(rf_fit2)
+```
+
+```{r}
+predRF2 = predict(rf_fit2, train_under50, type = "raw")
+confusionMatrix(predRF2, train_under50$Arrest, positive = "TRUE")
+```
+
+```{r}
+predRFtest2 = predict(rf_fit2, newdata = test_under50, type = "raw")
+confusionMatrix(predRFtest2, test_under50$Arrest, positive = "TRUE")
+```
+The training set in rf_fit2 did a little better than the training set in rf_fit when using parameter tuning. I set the tunegrid as hellinger because it is a split rule designed to fix imbalanced data. While the observation amounts are the same, I was concerned about the different levels between each variable. Not sure if this helped much but I'll use the gini split rule for my next predictions along with the optimal mtry amount in the tunegrid since both rules had higher accuracy scores in my previous predictions. 
+
+```{r}
+tunegrid2 = expand.grid(mtry = 1, splitrule = c("gini"), min.node.size=1)
+```
+
+```{r}
+set.seed(1234)
+rf_fit3 = train(x = as.matrix(train_under50[,-2]),y = as.matrix(train_under50$Arrest),
+               method = "ranger",
+               tuneGrid = tunegrid2,
+               importance = "permutation",
+               max.depth = 5,
+               trControl = fit_control)
+```
+
+```{r}
+print(rf_fit3)
+#plot(rf_fit3)
+varImp(rf_fit3)
+```
+
+```{r}
+predRF3 = predict(rf_fit3, train_under50, type = "raw")
+confusionMatrix(predRF3, train_under50$Arrest, positive = "TRUE")
+```
+
+```{r}
+predRFtest3 = predict(rf_fit3, newdata = test_under50, type = "raw")
+confusionMatrix(predRFtest3, test_under50$Arrest, positive = "TRUE")
+```
+This prediction was surprising... looks like updating the tunegrid for rf_fit3 made the testing set more accurate than the training set. 
+
+Comparing all 3:
+```{r}
+results = resamples(list(RFmtry=rf_fit, RFtune=rf_fit2, RFMaxDepth=rf_fit3))
+# boxplots of results
+bwplot(results)
+# dotplots of results
+dotplot(results)
+```
+
+```{r}
+#saveRDS(rf_fit2, "rf_fit2.rds")
+#rm(rf_fit2)
+#saveRDS(rf_fit3, "rf_fit3.rds")
+#rm(rf_fit3)
+```
+
+```{r}
+rf_fit2 = readRDS("rf_fit2.rds")
+rf_fit3 = readRDS("rf_fit3.rds")
+```
+
+Comparing another set of 3
+```{r}
+results2 = resamples(list(RFmtry=rf_fit2, RFtune=rf_fit3, RFMaxDepth=rf_fit))
+# boxplots of results
+bwplot(results)
+# dotplots of results
+dotplot(results)
+```
+
+```{r}
+results3 = resamples(list(RFmtry=rf_fit3, RFtune=rf_fit3, RFMaxDepth=rf_fit3))
+# boxplots of results
+bwplot(results)
+# dotplots of results
+dotplot(results)
+```
+
+```{r}
+fit_control2 = trainControl(method = "cv", number = 5)
+```
+```{r}
+set.seed(1234)
+rf_fit4 = train(x = as.matrix(train_under50[,-2]),y = as.matrix(train_under50$Arrest),
+               method = "ranger",
+               tuneGrid = tunegrid2,
+               importance = "permutation",
+               max.depth = 5,
+               trControl = fit_control2)
+```
+```{r}
+print(rf_fit3)
+varImp(rf_fit3)
+```
+
+```{r}
+predRF4 = predict(rf_fit4, train_under50, type = "raw")
+confusionMatrix(predRF4, train_under50$Arrest, positive = "TRUE")
+```
+I created rf_fit4 because I was trying get better sensitivity results. I tried adjusting the trControl function to have a cross-validation of 5 vs 10 but the sensitivity results came out worse. So far, out of all my predictions, the original rf_fit has come out with the best results overall in terms of accuracy, sensitivity, and specificity. 
+
+```{r}
+#saveRDS(rf_fit4, "rf_fit4.rds")
+#rm(rf_fit4)
+```
+```{r}
+rf_fit4 = readRDS("rf_fit4.rds")
+```
+
+
+

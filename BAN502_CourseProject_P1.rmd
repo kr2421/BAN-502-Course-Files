@@ -1,0 +1,211 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+```{r}
+options(tidyverse.quiet = TRUE)
+library(tidyverse)
+library(caret)
+library(ggplot2)
+library(ROCR)
+library(e1071)
+library(mice)
+library(VIM)
+library(ranger)
+library(RColorBrewer)
+library(rattle)
+library(rpart)
+library(leaps)
+library(GGally)
+library(gridExtra)
+library(car)
+library(lmtest)
+library(ggcorrplot)
+library(flexdashboard)
+library(dplyr)
+library(lubridate)
+```
+
+```{r}
+library(readr)
+chicago <- read_csv("chicago.csv")
+```
+
+
+```{r}
+chicago = chicago %>%
+  mutate(Block = as.factor(Block)) %>%
+  mutate(IUCR = as.factor(IUCR)) %>%
+  mutate(`Primary Type` = as.factor(`Primary Type`)) %>%
+  mutate(Description = as.factor(Description)) %>%
+  mutate(`Location Description` = as.factor(`Location Description`)) %>%
+  mutate(Arrest = as.factor(Arrest)) %>%
+ mutate(Arrest = fct_recode(Arrest, "False" = "0", "True" = "1")) %>%
+  mutate(Domestic = as.factor(Domestic)) %>%
+ mutate(Domestic = fct_recode(Domestic, "False" = "0", "True" = "1")) %>%
+  mutate(Beat = as.factor(Beat)) %>%
+  mutate(District = as.factor(District)) %>%
+  mutate(`FBI Code` = as.factor(`FBI Code`)) %>%
+  mutate(Location = as.double(Location))
+```
+
+```{r}
+summary(chicago)
+```
+
+```{r}
+chicago2 = chicago %>% dplyr::select("X1", "Date", "Block", "IUCR", "Primary Type", "Description", "Location Description", "Arrest", "Domestic", "Beat", "District", "Ward", "Community Area", "FBI Code", "Year", "Latitude", "Longitude")
+```
+
+```{r}
+vim_plot = aggr(chicago2, numbers = TRUE, prop = c(TRUE, FALSE),cex.axis=.7)
+```
+
+```{r}
+chicago2 = chicago2 %>% mutate(Date = mdy_hms(Date))
+```
+
+```{r}
+summary(chicago2)
+```
+```{r}
+chicago2 = chicago2 %>% drop_na(Latitude, Longitude)
+summary(chicago2)
+```
+
+```{r}
+chicago2 = chicago2 %>% drop_na(`Location Description`)
+summary(chicago2)
+```
+
+```{r}
+vim_plot = aggr(chicago2, numbers = TRUE, prop = c(TRUE, FALSE),cex.axis=.7)
+```
+```{r}
+chicago2 = chicago2 %>% drop_na(Ward)
+vim_plot = aggr(chicago2, numbers = TRUE, prop = c(TRUE, FALSE),cex.axis=.7)
+```
+
+*Add to ppt: Once I removed all the NAs from the rows containing missing values, I realized I did not lose that much data. (Removed from Latitude, Longitude, and Ward NAs for a total of 14,713 rows, only losing 2% of the data)
+
+```{r}
+summary(chicago2)
+```
+
+Primary Type
+```{r}
+ggplot(chicago2, aes(x = `Primary Type`, fill = Arrest)) +
+  geom_bar() +
+  theme(axis.text.x=element_text(angle = 90)) 
+```
+
+District
+```{r}
+ggplot(chicago2, aes(x = District, fill = Arrest)) +
+  geom_bar() +
+  theme(axis.text.x=element_text(angle = 90))
+```
+
+Domestic
+```{r}
+ggplot(chicago2, aes(x = Domestic, fill = Arrest)) +
+  geom_bar() +
+  theme_bw()
+```
+
+```{r}
+chicago2 = chicago2 %>% mutate(Ward = as.factor(Ward))
+```
+```{r}
+ggplot(chicago2, aes(x = Ward, fill = Arrest)) +
+  geom_bar() +
+  theme_bw(base_size = 5)
+```
+
+```{r}
+ggplot(chicago2, aes(x = `FBI Code`, fill = Arrest)) +
+  geom_bar() +
+  theme_bw(base_size = 7)
+```
+
+```{r}
+t1 = table(chicago2$Arrest, chicago2$`Primary Type`)
+prop.table(t1, margin = 2 )
+```
+
+```{r}
+t2 = table(chicago2$Arrest, chicago2$Domestic)
+prop.table(t2, margin = 2)
+```
+
+```{r}
+t3 = table(chicago2$Arrest, chicago2$`FBI Code`)
+prop.table(t3, margin = 2)
+```
+
+
+```{r}
+mod1 = glm(Arrest ~ `Primary Type` , chicago2, family = "binomial")
+summary(mod1)
+```
+
+```{r}
+mod2 = glm(Arrest ~ `Location Description` , chicago2, family = "binomial")
+summary(mod2)
+```
+
+```{r}
+mod3 = glm(Arrest ~ Ward + `Primary Type` , chicago2, family = "binomial")
+summary(mod3)
+```
+
+
+```{r}
+allmod = glm(Arrest ~ Date + IUCR + `Primary Type` + Description + `Location Description` + Domestic + District + Ward, chicago2,family = "binomial")
+summary(allmod)
+```
+
+```{r}
+chicago2 = chicago2 %>% mutate(`Community Area` = as.factor(`Community Area`))
+```
+
+```{r}
+summary(chicago2)
+```
+
+```{r}
+chicago_mainstats <- chicago2 %>% dplyr::select("Date","IUCR", "Primary Type", "Description", "Location Description", "Arrest", "Domestic", "District", "Ward","Community Area", "FBI Code")
+```
+```{r}
+summary(chicago_mainstats)
+```
+
+```{r}
+ggplot(chicago_mainstats, aes(x = `FBI Code`, fill = Arrest)) +
+  geom_bar() +
+  theme_bw()
+```
+
+```{r}
+ggplot(chicago_mainstats, aes(x= District, y = `Primary Type`, color = Arrest)) +
+  geom_point()+
+  theme(axis.text.x=element_text(angle = 90))
+```
+
+```{r}
+ggplot(chicago_mainstats, aes(x=Ward, fill = Arrest))+
+  geom_bar() +
+  theme_bw(base_size=5)
+```
+```{r}
+ggplot(chicago_mainstats, aes(x = `Community Area`, fill = Arrest))+
+  geom_bar()+
+  theme_bw(base_size = 5)
+```
+
+```{r}
+tmain = table(chicago_mainstats$`Primary Type`, chicago_mainstats$Domestic, chicago_mainstats$District, chicago_mainstats$Arrest)
+prop.table(tmain, margin = 4)
+````
+
